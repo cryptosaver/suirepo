@@ -237,7 +237,7 @@ where
     fn get_checkpoints(
         &self,
         cursor: Option<BigInt<u64>>,
-        limit: Option<BigInt<u64>>,
+        limit: Option<usize>,
         descending_order: bool,
     ) -> RpcResult<CheckpointPage> {
         return block_on(

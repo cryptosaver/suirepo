@@ -49,10 +49,10 @@ export function CheckpointsTable({
         ['checkpoints', { limit, cursor }],
         () =>
             rpc.getCheckpoints({
-                limit: (cursor && maxCursor && +cursor - +limit < +maxCursor
-                    ? +cursor - +maxCursor
-                    : limit
-                ).toString(),
+                limit:
+                    cursor && maxCursor && +cursor - +limit < +maxCursor
+                        ? +cursor - +maxCursor
+                        : limit,
                 descendingOrder: true,
                 cursor,
             }),

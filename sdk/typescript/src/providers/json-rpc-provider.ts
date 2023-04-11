@@ -188,12 +188,12 @@ export class JsonRpcProvider {
   /**
    * Get all Coin<`coin_type`> objects owned by an address.
    */
-  async getCoins(input: {
-    owner: SuiAddress;
-    coinType?: string | null;
-    cursor?: ObjectId | null;
-    limit?: number | null;
-  }): Promise<PaginatedCoins> {
+  async getCoins(
+    input: {
+      owner: SuiAddress;
+      coinType?: string | null;
+    } & PaginationArguments<PaginatedCoins['nextCursor']>,
+  ): Promise<PaginatedCoins> {
     if (!input.owner || !isValidSuiAddress(normalizeSuiAddress(input.owner))) {
       throw new Error('Invalid Sui address');
     }
@@ -780,17 +780,12 @@ export class JsonRpcProvider {
   /**
    * Returns historical checkpoints paginated
    */
-  async getCheckpoints(input: {
-    /**
-     * An optional paging cursor. If provided, the query will start from the next item after the specified cursor.
-     * Default to start from the first item if not specified.
-     */
-    cursor?: string;
-    /** Maximum item returned per page, default to 100 if not specified. */
-    limit?: string;
-    /** query result ordering, default to false (ascending order), oldest record first */
-    descendingOrder: boolean;
-  }): Promise<CheckpointPage> {
+  async getCheckpoints(
+    input: {
+      /** query result ordering, default to false (ascending order), oldest record first */
+      descendingOrder: boolean;
+    } & PaginationArguments<CheckpointPage['nextCursor']>,
+  ): Promise<CheckpointPage> {
     const resp = await this.client.requestWithType(
       'sui_getCheckpoints',
       [input.cursor, input.limit, input.descendingOrder],
@@ -825,11 +820,11 @@ export class JsonRpcProvider {
   /**
    * Return the committee information for the asked epoch
    */
-  async getEpochs(input?: {
-    cursor?: string;
-    limit?: string;
-    descendingOrder?: boolean;
-  }): Promise<EpochPage> {
+  async getEpochs(
+    input?: {
+      descendingOrder?: boolean;
+    } & PaginationArguments<EpochPage['nextCursor']>,
+  ): Promise<EpochPage> {
     return await this.client.requestWithType(
       'suix_getEpochs',
       [input?.cursor, input?.limit, input?.descendingOrder],
