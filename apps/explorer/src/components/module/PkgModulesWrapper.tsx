@@ -98,7 +98,7 @@ function PkgModuleViewWrapper({ id, modules, splitPanelOrientation }: Props) {
     const bytecodeContent = [
         <div
             key="bytecode"
-            className="grow overflow-auto border-gray-45 pt-5 md:pl-7"
+            className="h-full grow overflow-auto border-gray-45 pt-5 md:pl-7"
         >
             <TabGroup size="md">
                 <TabList>
@@ -106,7 +106,13 @@ function PkgModuleViewWrapper({ id, modules, splitPanelOrientation }: Props) {
                 </TabList>
                 <TabPanels>
                     <TabPanel>
-                        <div className="h-verticalListLong overflow-auto">
+                        <div
+                            className={clsx(
+                                'overflow-auto',
+                                splitPanelOrientation === 'horizontal' &&
+                                    'h-verticalListLong'
+                            )}
+                        >
                             <ModuleViewWrapper
                                 id={id}
                                 modules={modules}
@@ -119,7 +125,7 @@ function PkgModuleViewWrapper({ id, modules, splitPanelOrientation }: Props) {
         </div>,
         <div
             key="execute"
-            className="grow overflow-auto border-gray-45 pt-5 md:pl-7"
+            className="h-full grow overflow-auto border-gray-45 pt-5 md:pl-7"
         >
             <TabGroup size="md">
                 <TabList>
@@ -127,7 +133,13 @@ function PkgModuleViewWrapper({ id, modules, splitPanelOrientation }: Props) {
                 </TabList>
                 <TabPanels>
                     <TabPanel>
-                        <div className="h-verticalListLong overflow-auto">
+                        <div
+                            className={clsx(
+                                'overflow-auto',
+                                splitPanelOrientation === 'horizontal' &&
+                                    'h-verticalListLong'
+                            )}
+                        >
                             {id && selectedModule ? (
                                 <ModuleFunctionsInteraction
                                     // force recreating everything when we change modules
@@ -217,7 +229,13 @@ function PkgModuleViewWrapper({ id, modules, splitPanelOrientation }: Props) {
                 </div>
             </div>
             {isMediumOrAbove ? (
-                <div className="w-4/5">
+                <div
+                    className={clsx(
+                        'w-4/5',
+                        splitPanelOrientation === 'vertical' &&
+                            'h-verticalListLong'
+                    )}
+                >
                     <SplitPanes
                         direction={splitPanelOrientation}
                         defaultSizes={[40, 60]}
