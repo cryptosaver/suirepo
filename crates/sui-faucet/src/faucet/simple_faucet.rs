@@ -10,7 +10,6 @@ use tap::tap::TapFallible;
 use shared_crypto::intent::Intent;
 #[cfg(test)]
 use std::collections::HashSet;
-use std::default::Default;
 use std::path::Path;
 
 use sui::client_commands::WalletContext;
@@ -54,7 +53,7 @@ enum GasCoinResponse {
 }
 
 // TODO: replace this with dryrun at the SDK level
-const DEFAULT_GAS_COMPUTATION_BUCKET: u64 = 10000;
+const DEFAULT_GAS_COMPUTATION_BUCKET: u64 = 10_000_000;
 const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -79,7 +78,6 @@ impl SimpleFaucet {
             .map(|q| GasCoin::try_from(&q.1).unwrap())
             .filter(|coin| coin.0.balance.value() >= (config.amount * config.num_coins as u64))
             .collect::<Vec<GasCoin>>();
-
         let metrics = FaucetMetrics::new(prometheus_registry);
 
         let wal = WriteAheadLog::open(wal_path);
@@ -238,9 +236,9 @@ impl SimpleFaucet {
             .wallet
             .config
             .keystore
-            .sign_secure(&self.active_address, &tx_data, Intent::default())
+            .sign_secure(&self.active_address, &tx_data, Intent::sui_transaction())
             .map_err(FaucetError::internal)?;
-        let tx = Transaction::from_data(tx_data, Intent::default(), vec![signature])
+        let tx = Transaction::from_data(tx_data, Intent::sui_transaction(), vec![signature])
             .verify()
             .unwrap();
         let tx_digest = *tx.digest();
@@ -321,7 +319,6 @@ impl SimpleFaucet {
                 let response = self
                     .sign_and_execute_txn(uuid, recipient, coin_id, tx_data)
                     .await?;
-
                 self.check_and_map_transfer_gas_result(response, number_of_coins, recipient)
                     .await
             }
@@ -704,7 +701,7 @@ mod tests {
         let res = SuiClientCommands::PayAllSui {
             input_coins: vec![*bad_gas.id()],
             recipient: SuiAddress::random_for_testing_only(),
-            gas_budget: 50000,
+            gas_budget: 2_000_000,
         }
         .execute(faucet.wallet_mut())
         .await

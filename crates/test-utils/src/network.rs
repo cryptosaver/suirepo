@@ -16,7 +16,6 @@ use tokio::{task::JoinHandle, time::sleep};
 use tracing::info;
 
 use mysten_metrics::RegistryService;
-use shared_crypto::intent::Intent;
 use sui::config::SuiEnv;
 use sui::{client_commands::WalletContext, config::SuiClientConfig};
 use sui_config::builder::{ProtocolVersionsConfig, SupportedProtocolVersionsCallback};
@@ -24,17 +23,19 @@ use sui_config::genesis_config::GenesisConfig;
 use sui_config::node::DBCheckpointConfig;
 use sui_config::{Config, SUI_CLIENT_CONFIG, SUI_NETWORK_CONFIG};
 use sui_config::{FullnodeConfigBuilder, NodeConfig, PersistedConfig, SUI_KEYSTORE_FILENAME};
+use sui_json_rpc_types::{SuiTransactionBlockResponse, SuiTransactionBlockResponseOptions};
 use sui_keys::keystore::{AccountKeystore, FileBasedKeystore, Keystore};
 use sui_node::SuiNode;
 use sui_node::SuiNodeHandle;
 use sui_protocol_config::{ProtocolVersion, SupportedProtocolVersions};
+use sui_sdk::error::SuiRpcResult;
 use sui_sdk::{SuiClient, SuiClientBuilder};
 use sui_swarm::memory::{Swarm, SwarmBuilder};
 use sui_types::base_types::{AuthorityName, SuiAddress};
 use sui_types::committee::EpochId;
 use sui_types::crypto::KeypairTraits;
 use sui_types::crypto::SuiKeyPair;
-use sui_types::messages::TransactionData;
+use sui_types::messages::VerifiedTransaction;
 use sui_types::object::Object;
 use sui_types::sui_system_state::SuiSystemState;
 use sui_types::sui_system_state::SuiSystemStateTrait;
@@ -107,19 +108,6 @@ impl TestCluster {
             .unwrap()
     }
 
-    // Sign a transaction with a key currently managed by the WalletContext
-    pub fn sign_transaction(
-        &self,
-        signer_address: &SuiAddress,
-        data: &TransactionData,
-    ) -> sui_types::crypto::Signature {
-        self.wallet
-            .config
-            .keystore
-            .sign_secure(signer_address, data, Intent::default())
-            .unwrap()
-    }
-
     pub fn fullnode_config_builder(&self) -> FullnodeConfigBuilder {
         self.swarm.config().fullnode_config_builder()
     }
@@ -175,6 +163,21 @@ impl TestCluster {
         })
         .await
         .expect("Timed out waiting for cluster to target epoch")
+    }
+
+    pub async fn execute_transaction(
+        &self,
+        transaction: VerifiedTransaction,
+    ) -> SuiRpcResult<SuiTransactionBlockResponse> {
+        self.fullnode_handle
+            .sui_client
+            .quorum_driver()
+            .execute_transaction_block(
+                transaction,
+                SuiTransactionBlockResponseOptions::new().with_effects(),
+                None,
+            )
+            .await
     }
 
     #[cfg(msim)]

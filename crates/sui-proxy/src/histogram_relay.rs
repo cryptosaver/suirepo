@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 use anyhow::{bail, Result};
 use axum::{extract::Extension, http::StatusCode, routing::get, Router};
+use once_cell::sync::Lazy;
 use prometheus::proto::{Metric, MetricFamily};
+use prometheus::{register_counter_vec, register_histogram_vec};
+use prometheus::{CounterVec, HistogramVec};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::VecDeque,
@@ -14,7 +17,30 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tower_http::LatencyUnit;
 use tracing::{info, Level};
 
+use crate::var;
+
 const METRICS_ROUTE: &str = "/metrics";
+
+static RELAY_PRESSURE: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "relay_pressure",
+        "HistogramRelay's number of metric families submitted, exported, overflowed to/from the queue.",
+        &["histogram_relay"]
+    )
+    .unwrap()
+});
+static RELAY_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "relay_duration_seconds",
+        "HistogramRelay's submit/export fn latencies in seconds.",
+        &["histogram_relay"],
+        vec![
+            0.0008, 0.0016, 0.0032, 0.0064, 0.0128, 0.0256, 0.0512, 0.1024, 0.2048, 0.4096, 0.8192,
+            1.0, 1.25, 1.5, 1.75, 2.0, 4.0, 8.0, 10.0, 12.5, 15.0
+        ],
+    )
+    .unwrap()
+});
 
 // Creates a new http server that has as a sole purpose to expose
 // and endpoint that prometheus agent can use to poll for the metrics.
@@ -71,20 +97,37 @@ impl HistogramRelay {
     /// in doing so, it will also wrap each entry in a timestamp which will be use
     /// for pruning old entires on each submission call. this may not be ideal long term.
     pub fn submit(&self, data: Vec<MetricFamily>) {
+        RELAY_PRESSURE.with_label_values(&["submit"]).inc();
+        let timer = RELAY_DURATION.with_label_values(&["submit"]).start_timer();
         //  represents a collection timestamp
-        let timestamp_ms = SystemTime::now()
+        let timestamp_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-
         let mut queue = self
             .0
             .lock()
             .expect("couldn't get mut lock on HistogramRelay");
-        queue.retain(|v| (timestamp_ms - v.0) < 300000); // drain anything 5 mins or older
-        queue.push_back(Wrapper(timestamp_ms, data));
+        queue.retain(|v| {
+            // 5 mins is the max time in the queue allowed
+            if (timestamp_secs - v.0) < var!("MAX_QUEUE_TIME_SECS", 300) {
+                return true;
+            }
+            RELAY_PRESSURE.with_label_values(&["overflow"]).inc();
+            false
+        }); // drain anything 5 mins or older
+
+        // filter out our histograms from normal metrics
+        let data: Vec<MetricFamily> = extract_histograms(data).collect();
+        RELAY_PRESSURE
+            .with_label_values(&["submitted"])
+            .inc_by(data.len() as f64);
+        queue.push_back(Wrapper(timestamp_secs, data));
+        timer.observe_duration();
     }
     pub fn export(&self) -> Result<String> {
+        RELAY_PRESSURE.with_label_values(&["export"]).inc();
+        let timer = RELAY_DURATION.with_label_values(&["export"]).start_timer();
         // totally drain all metrics whenever we get a scrape request from the metrics handler
         let mut queue = self
             .0
@@ -92,23 +135,25 @@ impl HistogramRelay {
             .expect("couldn't get mut lock on HistogramRelay");
 
         let data: Vec<Wrapper> = queue.drain(..).collect();
-        info!(
-            "histogram queue drained {} items; remaining count {}",
-            data.len(),
-            queue.len()
-        );
-
         let mut histograms = vec![];
         for mf in data {
             histograms.extend(mf.1);
         }
+        info!(
+            "histogram queue drained {} items; remaining count {}",
+            histograms.len(),
+            queue.len()
+        );
 
-        let histograms: Vec<MetricFamily> = extract_histograms(histograms).collect();
         let encoder = prometheus::TextEncoder::new();
         let string = match encoder.encode_to_string(&histograms) {
             Ok(s) => s,
             Err(error) => bail!("{error}"),
         };
+        RELAY_PRESSURE
+            .with_label_values(&["exported"])
+            .inc_by(histograms.len() as f64);
+        timer.observe_duration();
         Ok(string)
     }
 }

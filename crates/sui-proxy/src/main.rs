@@ -7,7 +7,7 @@ use sui_proxy::config::ProxyConfig;
 use sui_proxy::{
     admin::{
         app, create_server_cert_default_allow, create_server_cert_enforce_peer,
-        make_reqwest_client, server, VERSION,
+        make_reqwest_client, server, Labels, VERSION,
     },
     config::load,
     histogram_relay, metrics,
@@ -59,13 +59,20 @@ async fn main() -> Result<()> {
     let acceptor = TlsAcceptor::new(tls_config);
     let client = make_reqwest_client(config.remote_write);
     let histogram_relay = histogram_relay::start_prometheus_server(config.histogram_address);
-    let app = app(config.network, client, histogram_relay, allower);
-
     let registry_service = metrics::start_prometheus_server(config.metrics_address);
     let prometheus_registry = registry_service.default_registry();
     prometheus_registry
         .register(mysten_metrics::uptime_metric(VERSION))
         .unwrap();
+    let app = app(
+        Labels {
+            network: config.network,
+            inventory_hostname: config.inventory_hostname,
+        },
+        client,
+        histogram_relay,
+        allower,
+    );
 
     server(listener, app, Some(acceptor)).await.unwrap();
 

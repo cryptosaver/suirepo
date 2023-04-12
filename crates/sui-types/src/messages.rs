@@ -50,6 +50,7 @@ use tap::Pipe;
 use thiserror::Error;
 use tracing::trace;
 
+// TODO: use RGP instead.
 pub const DUMMY_GAS_PRICE: u64 = 1;
 
 const BLOCKED_MOVE_FUNCTIONS: [(ObjectID, &str, &str); 0] = [];
@@ -826,10 +827,9 @@ impl TransactionKind {
     /// directly.
     pub fn get_advance_epoch_tx_gas_summary(&self) -> Option<(u64, u64)> {
         match self {
-            Self::ChangeEpoch(e) => Some((
-                e.computation_charge + e.storage_charge,
-                e.storage_rebate - e.non_refundable_storage_fee,
-            )),
+            Self::ChangeEpoch(e) => {
+                Some((e.computation_charge + e.storage_charge, e.storage_rebate))
+            }
             _ => None,
         }
     }
@@ -1987,7 +1987,7 @@ impl VerifiedTransaction {
             .pipe(|data| {
                 SenderSignedData::new_from_sender_signature(
                     data,
-                    Intent::default(),
+                    Intent::sui_transaction(),
                     Ed25519SuiSignature::from_bytes(&[0; Ed25519SuiSignature::LENGTH])
                         .unwrap()
                         .into(),
@@ -2402,6 +2402,13 @@ pub enum ExecutionFailureStatus {
 
     #[error("Invalid package upgrade. {upgrade_error}")]
     PackageUpgradeError { upgrade_error: PackageUpgradeError },
+
+    // Indicates the transaction tried to write objects too large to storage
+    #[error(
+        "Written objects of {current_size} bytes too large. \
+    Limit is {max_size} bytes"
+    )]
+    WrittenObjectsTooLarge { current_size: u64, max_size: u64 },
     // NOTE: if you want to add a new enum,
     // please add it at the end for Rust SDK backward compatibility.
 }
@@ -3174,6 +3181,10 @@ impl InputObjects {
             .filter_map(|(_, object)| object.data.try_as_move().map(MoveObject::version));
 
         SequenceNumber::lamport_increment(input_versions)
+    }
+
+    pub fn into_objects(self) -> Vec<(InputObjectKind, Object)> {
+        self.objects
     }
 
     pub fn into_object_map(self) -> BTreeMap<ObjectID, Object> {

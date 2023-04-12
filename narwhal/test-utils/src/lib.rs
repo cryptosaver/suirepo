@@ -25,7 +25,7 @@ use rand::{
     thread_rng, Rng, RngCore, SeedableRng,
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     num::NonZeroUsize,
     ops::RangeInclusive,
     sync::Arc,
@@ -37,14 +37,14 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tracing::info;
 use types::{
     Batch, BatchDigest, Certificate, CertificateAPI, CertificateDigest, CommittedSubDagShell,
-    ConsensusStore, FetchCertificatesRequest, FetchCertificatesResponse, GetCertificatesRequest,
-    GetCertificatesResponse, Header, HeaderAPI, HeaderV1Builder, PayloadAvailabilityRequest,
-    PayloadAvailabilityResponse, PrimaryToPrimary, PrimaryToPrimaryServer, PrimaryToWorker,
-    PrimaryToWorkerServer, RequestBatchRequest, RequestBatchResponse, RequestBatchesRequest,
-    RequestBatchesResponse, RequestVoteRequest, RequestVoteResponse, Round, SendCertificateRequest,
-    SendCertificateResponse, SequenceNumber, TimestampMs, Transaction, Vote, VoteAPI,
-    WorkerBatchMessage, WorkerDeleteBatchesMessage, WorkerSynchronizeMessage, WorkerToWorker,
-    WorkerToWorkerServer,
+    ConsensusStore, FetchBatchesRequest, FetchBatchesResponse, FetchCertificatesRequest,
+    FetchCertificatesResponse, GetCertificatesRequest, GetCertificatesResponse, Header, HeaderAPI,
+    HeaderV1Builder, PayloadAvailabilityRequest, PayloadAvailabilityResponse, PrimaryToPrimary,
+    PrimaryToPrimaryServer, PrimaryToWorker, PrimaryToWorkerServer, RequestBatchRequest,
+    RequestBatchResponse, RequestBatchesRequest, RequestBatchesResponse, RequestVoteRequest,
+    RequestVoteResponse, Round, SendCertificateRequest, SendCertificateResponse, SequenceNumber,
+    TimestampMs, Transaction, Vote, VoteAPI, WorkerBatchMessage, WorkerDeleteBatchesMessage,
+    WorkerSynchronizeMessage, WorkerToWorker, WorkerToWorkerServer,
 };
 
 pub mod cluster;
@@ -310,6 +310,15 @@ impl PrimaryToWorker for PrimaryToWorkerMockServer {
         Ok(anemo::Response::new(()))
     }
 
+    async fn fetch_batches(
+        &self,
+        _request: anemo::Request<FetchBatchesRequest>,
+    ) -> Result<anemo::Response<FetchBatchesResponse>, anemo::rpc::Status> {
+        Ok(anemo::Response::new(FetchBatchesResponse {
+            batches: HashMap::new(),
+        }))
+    }
+
     async fn delete_batches(
         &self,
         _request: anemo::Request<WorkerDeleteBatchesMessage>,
@@ -405,7 +414,7 @@ pub fn batch_with_transactions(num_of_transactions: usize) -> Batch {
 
 const BATCHES_CF: &str = "batches";
 
-pub fn open_batch_store() -> DBMap<BatchDigest, Batch> {
+pub fn create_batch_store() -> DBMap<BatchDigest, Batch> {
     DBMap::<BatchDigest, Batch>::open(
         temp_dir(),
         MetricConf::default(),
@@ -714,6 +723,7 @@ pub struct Builder<R = OsRng> {
     number_of_workers: NonZeroUsize,
     randomize_ports: bool,
     epoch: Epoch,
+    stake: VecDeque<Stake>,
 }
 
 impl Default for Builder {
@@ -730,6 +740,7 @@ impl Builder {
             committee_size: NonZeroUsize::new(4).unwrap(),
             number_of_workers: NonZeroUsize::new(4).unwrap(),
             randomize_ports: false,
+            stake: VecDeque::new(),
         }
     }
 }
@@ -755,6 +766,11 @@ impl<R> Builder<R> {
         self
     }
 
+    pub fn stake_distribution(mut self, stake: VecDeque<Stake>) -> Self {
+        self.stake = stake;
+        self
+    }
+
     pub fn rng<N: rand::RngCore + rand::CryptoRng>(self, rng: N) -> Builder<N> {
         Builder {
             rng,
@@ -762,12 +778,17 @@ impl<R> Builder<R> {
             committee_size: self.committee_size,
             number_of_workers: self.number_of_workers,
             randomize_ports: self.randomize_ports,
+            stake: self.stake,
         }
     }
 }
 
 impl<R: rand::RngCore + rand::CryptoRng> Builder<R> {
     pub fn build(mut self) -> CommitteeFixture {
+        if !self.stake.is_empty() {
+            assert_eq!(self.stake.len(), self.committee_size.get(), "Stake vector has been provided but is different length the committe - it should be the same");
+        }
+
         let mut authorities: Vec<AuthorityFixture> = (0..self.committee_size.get())
             .map(|_| {
                 AuthorityFixture::generate(
@@ -784,12 +805,16 @@ impl<R: rand::RngCore + rand::CryptoRng> Builder<R> {
             })
             .collect();
 
+        // now order the AuthorityFixtures by the authority PublicKey so when we iterate either via the
+        // committee.authorities() or via the fixture.authorities() we'll get the same order.
+        authorities.sort_by_key(|a1| a1.public_key());
+
         // create the committee in order to assign the ids to the authorities
         let mut committee_builder = CommitteeBuilder::new(self.epoch);
         for a in authorities.iter() {
             committee_builder = committee_builder.add_authority(
                 a.public_key().clone(),
-                a.stake,
+                self.stake.pop_front().unwrap_or(1),
                 a.address.clone(),
                 a.network_public_key(),
             );
@@ -802,11 +827,17 @@ impl<R: rand::RngCore + rand::CryptoRng> Builder<R> {
                 .authority_by_key(authority.keypair.public())
                 .unwrap();
             authority.authority = OnceCell::with_value(a.clone());
+            authority.stake = a.stake();
         }
 
-        // now order the AuthorityFixtures by the authority id so when we iterate either via the
-        // committee.authorities() or via the fixture.authorities() we'll get the same order.
-        authorities.sort_by_key(|a1| a1.authority().id());
+        // Now update the stake to follow the order of the authorities so we produce expected results
+        let authorities: Vec<AuthorityFixture> = authorities
+            .into_iter()
+            .map(|mut authority| {
+                authority.stake = self.stake.pop_front().unwrap_or(1);
+                authority
+            })
+            .collect();
 
         CommitteeFixture {
             authorities,

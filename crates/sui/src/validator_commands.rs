@@ -54,8 +54,7 @@ use sui_types::{
     SUI_SYSTEM_OBJ_CALL_ARG,
 };
 
-// TODO adjust this to a reasonable number after the gas fix is in
-const DEFAULT_GAS_BUDGET: u64 = 15_000_000;
+const DEFAULT_GAS_BUDGET: u64 = 200_000_000; // 0.2 SUI
 
 #[derive(Parser)]
 #[clap(rename_all = "kebab-case")]
@@ -172,7 +171,7 @@ fn make_key_files(
                 key
             }
             None => {
-                let (_, kp, _, _) = generate_new_key(SignatureScheme::ED25519, None)?;
+                let (_, kp, _, _) = generate_new_key(SignatureScheme::ED25519, None, None)?;
                 println!("Generated new key file: {:?}.", file_name);
                 kp
             }
@@ -544,12 +543,13 @@ async fn call_0x5(
         rgp,
     )
     .unwrap();
-    let signature = context
-        .config
-        .keystore
-        .sign_secure(&sender, &tx_data, Intent::default())?;
+    let signature =
+        context
+            .config
+            .keystore
+            .sign_secure(&sender, &tx_data, Intent::sui_transaction())?;
     let transaction =
-        Transaction::from_data(tx_data, Intent::default(), vec![signature]).verify()?;
+        Transaction::from_data(tx_data, Intent::sui_transaction(), vec![signature]).verify()?;
     sui_client
         .quorum_driver()
         .execute_transaction_block(

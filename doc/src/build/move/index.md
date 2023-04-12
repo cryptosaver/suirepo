@@ -14,8 +14,7 @@ blockchains with vastly different data and execution models.
 
 The documentation for the original Move language is available in the [Move GitHub](https://github.com/move-language/move) repository and includes a [tutorial](https://github.com/move-language/move/blob/main/language/documentation/tutorial/README.md) and a [book](https://github.com/move-language/move/blob/main/language/documentation/book/src/SUMMARY.md) describing language features in detail. These are invaluable resources to deepen your understanding of the Move language but not strict prerequisites to following the Sui tutorial, which we strived to make self-contained. Further, Sui Move differs in some ways from Move, which we explore here.
 
-You can use Sui Move to define, create, and manage programmable [Sui objects](../objects.md) representing user-level assets. Sui's object system is implemented by adding new functionality to Move while also imposing additional restrictions, creating a dialect of Move (a.k.a. *Sui Move*) that
-makes certain parts of the original Move documentation not applicable to smart contract development in Sui. Consequently, it's best to follow this tutorial and the relevant Move documentation links within.
+You can use Sui Move to define, create, and manage programmable [Sui objects](../objects.md) representing user-level assets. Sui's object system is implemented by adding new functionality to Move while also imposing additional restrictions, creating a dialect of Move (a.k.a. *Sui Move*) that makes certain parts of the original Move documentation not applicable to smart contract development in Sui. Consequently, it's best to follow this tutorial and the relevant Move documentation links within.
 
 Before looking at the Move code included with Sui, let's talk briefly about Move code organization, which applies both to code included with
 Sui and the custom code developers write.
@@ -56,7 +55,7 @@ module sui::coin {
 
 Don't worry about the rest of the module contents for now; you can read more about [modules](https://github.com/move-language/move/blob/main/language/documentation/book/src/modules-and-scripts.md#modules) in the Move book later.
 
-**Important:** In Sui Move, package names are always in CamelCase, while the address alias is lowercase, for example `sui = 0x2` and `std = 0x1`. So: `Sui` = name of the imported package (Sui = sui framework), `sui` = address alias of `0x2`, `sui::sui` = module sui under the address `0x2`, and `sui::sui::SUI` = type in the module above.
+**Important:** In Sui Move, package names are always in PascalCase, while the address alias is lowercase, for example `sui = 0x2` and `std = 0x1`. So: `Sui` = name of the imported package (Sui = sui framework), `sui` = address alias of `0x2`, `sui::sui` = module sui under the address `0x2`, and `sui::sui::SUI` = type in the module above.
 
 When you define a module, specify the module name (`coin`) preceded by the name of the package where this module resides (`sui`). The combination of the package name and the module name uniquely identifies a module in Sui Move source code. The package name is globally unique, but different packages can contain modules with the same name. While module names are not unique, when they combine with their unique package name they result in a unique combination.
 

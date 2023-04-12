@@ -16,7 +16,6 @@ use crate::crypto::{
     Signature, SuiAuthoritySignature, SuiSignature,
 };
 use crate::id::{ID, UID};
-use crate::OBJECT_START_VERSION;
 use crate::{gas_coin::GasCoin, object::Object, SUI_FRAMEWORK_ADDRESS};
 use shared_crypto::intent::{Intent, IntentMessage, IntentScope};
 use sui_protocol_config::ProtocolConfig;
@@ -28,9 +27,9 @@ fn test_signatures() {
     let (addr1, sec1): (_, AccountKeyPair) = get_key_pair();
     let (addr2, _sec2): (_, AccountKeyPair) = get_key_pair();
 
-    let foo = IntentMessage::new(Intent::default(), Foo("hello".into()));
-    let foox = IntentMessage::new(Intent::default(), Foo("hellox".into()));
-    let bar = IntentMessage::new(Intent::default(), Bar("hello".into()));
+    let foo = IntentMessage::new(Intent::sui_transaction(), Foo("hello".into()));
+    let foox = IntentMessage::new(Intent::sui_transaction(), Foo("hellox".into()));
+    let bar = IntentMessage::new(Intent::sui_transaction(), Bar("hello".into()));
 
     let s = Signature::new_secure(&foo, &sec1);
     assert!(s.verify_secure(&foo, addr1).is_ok());
@@ -39,7 +38,7 @@ fn test_signatures() {
     assert!(s
         .verify_secure(
             &IntentMessage::new(
-                Intent::default().with_scope(IntentScope::SenderSignedTransaction),
+                Intent::sui_app(IntentScope::SenderSignedTransaction),
                 Foo("hello".into())
             ),
             addr1
@@ -54,7 +53,7 @@ fn test_signatures() {
 fn test_signatures_serde() {
     let (_, sec1): (_, AccountKeyPair) = get_key_pair();
     let foo = Foo("hello".into());
-    let s = Signature::new_secure(&IntentMessage::new(Intent::default(), foo), &sec1);
+    let s = Signature::new_secure(&IntentMessage::new(Intent::sui_transaction(), foo), &sec1);
 
     let serialized = bcs::to_bytes(&s).unwrap();
     println!("{:?}", serialized);
@@ -311,7 +310,7 @@ fn test_transaction_digest_serde_human_readable() {
 fn test_authority_signature_serde_not_human_readable() {
     let (_, key): (_, AuthorityKeyPair) = get_key_pair();
     let sig = AuthoritySignature::new_secure(
-        &IntentMessage::new(Intent::default(), Foo("some data".to_string())),
+        &IntentMessage::new(Intent::sui_transaction(), Foo("some data".to_string())),
         &0,
         &key,
     );
@@ -327,7 +326,7 @@ fn test_authority_signature_serde_not_human_readable() {
 fn test_authority_signature_serde_human_readable() {
     let (_, key): (_, AuthorityKeyPair) = get_key_pair();
     let sig = AuthoritySignature::new_secure(
-        &IntentMessage::new(Intent::default(), Foo("some data".to_string())),
+        &IntentMessage::new(Intent::sui_transaction(), Foo("some data".to_string())),
         &0,
         &key,
     );
@@ -359,8 +358,7 @@ fn test_move_object_size_for_gas_metering() {
 fn test_move_package_size_for_gas_metering() {
     let module = file_format::empty_module();
     let package = Object::new_package(
-        vec![module],
-        OBJECT_START_VERSION,
+        &[module],
         TransactionDigest::genesis(),
         ProtocolConfig::get_for_max_version().max_move_package_size(),
         &[], // empty dependencies for empty package (no modules)

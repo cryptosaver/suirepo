@@ -23,13 +23,16 @@ use sui_types::crypto::{
     generate_proof_of_possession, get_account_key_pair, get_key_pair_from_rng, AccountKeyPair,
     KeypairTraits, ToFromBytes,
 };
+use sui_types::error::SuiError;
 use sui_types::gas::GasCostSummary;
 use sui_types::message_envelope::Message;
 use sui_types::messages::{
-    CallArg, CertifiedTransactionEffects, ObjectArg, TransactionData, TransactionEffectsAPI,
-    VerifiedTransaction,
+    CallArg, CertifiedTransactionEffects, ObjectArg, TransactionData, TransactionDataAPI,
+    TransactionEffectsAPI, TransactionExpiration, VerifiedTransaction,
 };
-use sui_types::object::{generate_test_gas_objects_with_owner, Object};
+use sui_types::object::{
+    generate_test_gas_objects_with_owner, generate_test_gas_objects_with_owner_and_value, Object,
+};
 use sui_types::sui_system_state::sui_system_state_inner_v1::VerifiedValidatorMetadataV1;
 use sui_types::sui_system_state::{
     get_validator_from_table, sui_system_state_summary::get_validator_by_pool_id,
@@ -47,6 +50,8 @@ use test_utils::{
 use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
+const GAS_BUDGET: u64 = 200_000_000;
+
 #[sim_test]
 async fn advance_epoch_tx_test() {
     let authorities = spawn_test_authorities(&test_authority_configs()).await;
@@ -60,7 +65,7 @@ async fn advance_epoch_tx_test() {
             let (_system_state, effects) = state
                 .create_and_execute_advance_epoch_tx(
                     &state.epoch_store_for_testing(),
-                    &GasCostSummary::new(0, 0, 0),
+                    &GasCostSummary::new(0, 0, 0, 0),
                     0, // checkpoint
                     0, // epoch_start_timestamp_ms
                 )
@@ -92,6 +97,49 @@ async fn basic_reconfig_end_to_end_test() {
     sleep(Duration::from_secs(1)).await;
     let authorities = spawn_test_authorities(&test_authority_configs()).await;
     trigger_reconfiguration(&authorities).await;
+}
+
+#[sim_test]
+async fn test_transaction_expiration() {
+    let (sender, keypair) = get_account_key_pair();
+    let gas = Object::with_owner_for_testing(sender);
+    let (configs, objects) = test_authority_configs_with_objects([gas]);
+    let authorities = spawn_test_authorities(&configs).await;
+    trigger_reconfiguration(&authorities).await;
+
+    let mut data = TransactionData::new_transfer_sui_with_dummy_gas_price(
+        sender,
+        sender,
+        Some(1),
+        objects[0].compute_object_reference(),
+        GAS_BUDGET,
+    );
+    // Expired transaction returns an error
+    let mut expired_data = data.clone();
+    *expired_data.expiration_mut_for_testing() = TransactionExpiration::Epoch(0);
+    let expired_transaction = to_sender_signed_transaction(expired_data, &keypair);
+    let result = authorities[0]
+        .with_async(|node| async {
+            let epoch_store = node.state().epoch_store_for_testing();
+            node.state()
+                .handle_transaction(&epoch_store, expired_transaction)
+                .await
+        })
+        .await;
+    assert!(matches!(result.unwrap_err(), SuiError::TransactionExpired));
+
+    // Non expired transaction signed without issue
+    *data.expiration_mut_for_testing() = TransactionExpiration::Epoch(10);
+    let transaction = to_sender_signed_transaction(data, &keypair);
+    authorities[0]
+        .with_async(|node| async {
+            let epoch_store = node.state().epoch_store_for_testing();
+            node.state()
+                .handle_transaction(&epoch_store, transaction)
+                .await
+        })
+        .await
+        .unwrap();
 }
 
 #[sim_test]
@@ -437,7 +485,8 @@ async fn test_validator_candidate_pool_read() {
     let new_validator_key = gen_keys(5).pop().unwrap();
     let new_validator_address: SuiAddress = new_validator_key.public().into();
 
-    let gas_objects = generate_test_gas_objects_with_owner(4, new_validator_address);
+    let gas_objects =
+        generate_test_gas_objects_with_owner_and_value(4, new_validator_address, 2_000_000_000);
 
     let init_configs = ConfigBuilder::new_with_temp_dir()
         .rng(StdRng::from_seed([0; 32]))
@@ -568,7 +617,7 @@ async fn test_inactive_validator_pool_read() {
             initial_shared_version: SUI_SYSTEM_STATE_OBJECT_SHARED_VERSION,
             mutable: true,
         })],
-        10000,
+        GAS_BUDGET,
     )
     .unwrap();
     let transaction = to_sender_signed_transaction(tx_data, &leaving_validator_account_key);
@@ -615,7 +664,8 @@ async fn test_reconfig_with_committee_change_basic() {
     // TODO: In order to better "test" this flow we probably want to set the validators to ignore
     // all p2p peer connections so that we can verify that new nodes joining can really "talk" with the
     // other validators in the set.
-    let gas_objects = generate_test_gas_objects_with_owner(4, new_validator_address);
+    let gas_objects =
+        generate_test_gas_objects_with_owner_and_value(4, new_validator_address, 2_000_000_000);
     let stake = Object::new_gas_with_balance_and_owner_for_testing(
         30_000_000_000_000_000,
         new_validator_address,
@@ -757,7 +807,8 @@ async fn test_reconfig_with_committee_change_stress() {
         .iter()
         .map(|key| {
             let sender: SuiAddress = key.public().into();
-            let gas_objects = generate_test_gas_objects_with_owner(4, sender);
+            let gas_objects =
+                generate_test_gas_objects_with_owner_and_value(4, sender, 2_000_000_000);
             let stake =
                 Object::new_gas_with_balance_and_owner_for_testing(30_000_000_000_000_000, sender);
             (sender, (gas_objects, stake))
@@ -1008,6 +1059,74 @@ async fn test_reconfig_with_committee_change_stress() {
     assert_eq!(epoch, 3);
 }
 
+#[cfg(msim)]
+#[sim_test]
+async fn safe_mode_reconfig_test() {
+    use sui_adapter::execution_engine::advance_epoch_result_injection;
+    use test_utils::messages::make_staking_transaction_with_wallet_context;
+
+    let mut test_cluster = TestClusterBuilder::new()
+        .with_epoch_duration_ms(5000)
+        .build()
+        .await
+        .unwrap();
+
+    let system_state = test_cluster
+        .sui_client()
+        .governance_api()
+        .get_latest_sui_system_state()
+        .await
+        .unwrap();
+
+    // On startup, we should be at V1.
+    assert_eq!(system_state.system_state_version, 1);
+    assert_eq!(system_state.epoch, 0);
+
+    // Wait for regular epoch change to happen once. Migration from V1 to V2 should happen here.
+    let system_state = test_cluster.wait_for_epoch(Some(1)).await;
+    assert!(!system_state.safe_mode());
+    assert_eq!(system_state.epoch(), 1);
+    assert_eq!(system_state.system_state_version(), 2);
+
+    let prev_epoch_start_timestamp = system_state.epoch_start_timestamp_ms();
+
+    // We are going to enter safe mode so set the expectation right.
+    test_cluster.set_safe_mode_expected(true);
+
+    // Now inject an error into epoch change txn execution.
+    advance_epoch_result_injection::set_override(true);
+
+    // Reconfig again and check that we are in safe mode now.
+    let system_state = test_cluster.wait_for_epoch(Some(2)).await;
+    assert!(system_state.safe_mode());
+    assert_eq!(system_state.epoch(), 2);
+    // Check that time is properly set even in safe mode.
+    assert!(system_state.epoch_start_timestamp_ms() >= prev_epoch_start_timestamp + 5000);
+
+    // Try a staking transaction.
+    let validator_address = system_state
+        .into_sui_system_state_summary()
+        .active_validators[0]
+        .sui_address;
+    let txn =
+        make_staking_transaction_with_wallet_context(test_cluster.wallet_mut(), validator_address)
+            .await;
+    let response = test_cluster
+        .execute_transaction(txn)
+        .await
+        .expect("Staking txn failed");
+    assert!(response.status_ok().unwrap());
+
+    // Now remove the override and check that in the next epoch we are no longer in safe mode.
+    test_cluster.set_safe_mode_expected(false);
+    advance_epoch_result_injection::set_override(false);
+
+    let system_state = test_cluster.wait_for_epoch(Some(3)).await;
+    assert!(!system_state.safe_mode());
+    assert_eq!(system_state.epoch(), 3);
+    assert_eq!(system_state.system_state_version(), 2);
+}
+
 async fn execute_add_validator_candidate_tx(
     authorities: &[SuiNodeHandle],
     gas_object: ObjectRef,
@@ -1045,7 +1164,7 @@ async fn execute_add_validator_candidate_tx(
             CallArg::Pure(bcs::to_bytes(&1u64).unwrap()), // gas_price
             CallArg::Pure(bcs::to_bytes(&0u64).unwrap()), // commission_rate
         ],
-        10000,
+        GAS_BUDGET,
     )
     .unwrap();
     let transaction =
@@ -1091,7 +1210,7 @@ async fn execute_join_committee_txes(
             CallArg::Object(ObjectArg::ImmOrOwnedObject(stake)),
             CallArg::Pure(bcs::to_bytes(&sender).unwrap()),
         ],
-        10000,
+        GAS_BUDGET,
     )
     .unwrap();
     let transaction = to_sender_signed_transaction(stake_tx_data, node_config.account_key_pair());
@@ -1115,7 +1234,7 @@ async fn execute_join_committee_txes(
             initial_shared_version: SUI_SYSTEM_STATE_OBJECT_SHARED_VERSION,
             mutable: true,
         })],
-        10000,
+        GAS_BUDGET,
     )
     .unwrap();
     let transaction =
@@ -1146,7 +1265,7 @@ async fn execute_leave_committee_tx(
             initial_shared_version: SUI_SYSTEM_STATE_OBJECT_SHARED_VERSION,
             mutable: true,
         })],
-        10000,
+        GAS_BUDGET,
     )
     .unwrap();
 

@@ -90,6 +90,10 @@
 						"fileName": "learn/tokenomics/gas-pricing"
 					},
 					{
+						"label": "Gas in Sui",
+						"fileName": "learn/tokenomics/gas-in-sui"
+					},
+					{
 						"label": "Sui Storage Fund",
 						"fileName": "learn/tokenomics/storage-fund"
 					},
@@ -117,8 +121,12 @@
 						"fileName": "learn/cryptography/sui-offline-signing"
 					},
 					{
-						"label": "Sui Multi-Signature",
+						"label": "Sui Multisig",
 						"fileName": "learn/cryptography/sui-multisig"
+					},
+					{
+						"label": "Sui Keys and Addresses",
+						"fileName": "learn/cryptography/sui-wallet-specs"
 					}
 				]
 			},
@@ -146,6 +154,10 @@
 			{
 				"label": "Sui Local Network",
 				"fileName": "build/sui-local-network"
+			},
+			{
+				"label": "Sui Gas Charges",
+				"fileName": "build/sui-gas-charges"
 			},
 			{
 				"label": "Sui Object Display Standard",
@@ -179,6 +191,10 @@
 					{
 						"label": "Debug and Publish Move Packages",
 						"fileName": "build/move/debug-publish"
+					},
+					{
+						"label": "Upgrade Move Packages",
+						"fileName": "build/package-upgrades"
 					},
 					{
 						"label": "Sui Move Library",

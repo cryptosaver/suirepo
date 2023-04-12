@@ -162,24 +162,6 @@ module sui_system::governance_test_utils {
         test_scenario::next_epoch(scenario, @0x0);
     }
 
-    public fun advance_epoch_safe_mode(scenario: &mut Scenario) {
-        advance_epoch_safe_mode_with_reward_amounts(0, 0, 0, 0, scenario)
-    }
-
-    public fun advance_epoch_safe_mode_with_reward_amounts(
-        storage_charge: u64, computation_charge: u64, storage_rebate: u64, non_refundable_storage_rebate: u64, scenario: &mut Scenario,
-    ) {
-        test_scenario::next_tx(scenario, @0x0);
-        let new_epoch = tx_context::epoch(test_scenario::ctx(scenario)) + 1;
-        let system_state = test_scenario::take_shared<SuiSystemState>(scenario);
-
-        let ctx = test_scenario::ctx(scenario);
-        sui_system::advance_epoch_safe_mode_for_testing(
-            &mut system_state, new_epoch, 1, storage_charge, computation_charge, storage_rebate, non_refundable_storage_rebate, ctx);
-        test_scenario::return_shared(system_state);
-        test_scenario::next_epoch(scenario, @0x0);
-    }
-
     public fun stake_with(
         staker: address, validator: address, amount: u64, scenario: &mut Scenario
     ) {
@@ -205,10 +187,9 @@ module sui_system::governance_test_utils {
         test_scenario::return_shared(system_state);
     }
 
-    public fun add_validator_full_flow(validator: address, init_stake_amount: u64, pubkey: vector<u8>, pop: vector<u8>, scenario: &mut Scenario) {
+    public fun add_validator_full_flow(validator: address, name: vector<u8>, net_addr: vector<u8>, init_stake_amount: u64, pubkey: vector<u8>, pop: vector<u8>, scenario: &mut Scenario) {
         test_scenario::next_tx(scenario, validator);
         let system_state = test_scenario::take_shared<SuiSystemState>(scenario);
-        let addr = b"/ip4/127.0.0.1/udp/80";
         let ctx = test_scenario::ctx(scenario);
 
         sui_system::request_add_validator_candidate(
@@ -217,14 +198,14 @@ module sui_system::governance_test_utils {
             vector[171, 2, 39, 3, 139, 105, 166, 171, 153, 151, 102, 197, 151, 186, 140, 116, 114, 90, 213, 225, 20, 167, 60, 69, 203, 12, 180, 198, 9, 217, 117, 38],
             vector[171, 3, 39, 3, 139, 105, 166, 171, 153, 151, 102, 197, 151, 186, 140, 116, 114, 90, 213, 225, 20, 167, 60, 69, 203, 12, 180, 198, 9, 217, 117, 38],
             pop,
-            b"name",
+            name,
             b"description",
             b"image_url",
             b"project_url",
-            addr,
-            addr,
-            addr,
-            addr,
+            net_addr,
+            net_addr,
+            net_addr,
+            net_addr,
             1,
             0,
             ctx
@@ -234,10 +215,9 @@ module sui_system::governance_test_utils {
         test_scenario::return_shared(system_state);
     }
 
-    public fun add_validator_candidate(validator: address, pubkey: vector<u8>, pop: vector<u8>, scenario: &mut Scenario) {
+    public fun add_validator_candidate(validator: address, name: vector<u8>, net_addr: vector<u8>, pubkey: vector<u8>, pop: vector<u8>, scenario: &mut Scenario) {
         test_scenario::next_tx(scenario, validator);
         let system_state = test_scenario::take_shared<SuiSystemState>(scenario);
-        let addr = b"/ip4/127.0.0.1/udp/80";
         let ctx = test_scenario::ctx(scenario);
 
         sui_system::request_add_validator_candidate(
@@ -246,14 +226,14 @@ module sui_system::governance_test_utils {
             vector[171, 2, 39, 3, 139, 105, 166, 171, 153, 151, 102, 197, 151, 186, 140, 116, 114, 90, 213, 225, 20, 167, 60, 69, 203, 12, 180, 198, 9, 217, 117, 38],
             vector[171, 3, 39, 3, 139, 105, 166, 171, 153, 151, 102, 197, 151, 186, 140, 116, 114, 90, 213, 225, 20, 167, 60, 69, 203, 12, 180, 198, 9, 217, 117, 38],
             pop,
-            b"name",
+            name,
             b"description",
             b"image_url",
             b"project_url",
-            addr,
-            addr,
-            addr,
-            addr,
+            net_addr,
+            net_addr,
+            net_addr,
+            net_addr,
             1,
             0,
             ctx

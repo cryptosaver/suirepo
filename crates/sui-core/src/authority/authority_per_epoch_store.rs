@@ -14,6 +14,7 @@ use std::future::Future;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use sui_config::node::ExpensiveSafetyCheckConfig;
 use sui_types::accumulator::Accumulator;
 use sui_types::base_types::{AuthorityName, EpochId, ObjectID, SequenceNumber, TransactionDigest};
 use sui_types::committee::Committee;
@@ -35,8 +36,8 @@ use typed_store::traits::{TableSummary, TypedStoreDebug};
 use crate::authority::epoch_start_configuration::EpochStartConfiguration;
 use crate::authority::{AuthorityStore, ResolverWrapper};
 use crate::checkpoints::{
-    CheckpointCommitHeight, CheckpointServiceNotify, EpochStats, PendingCheckpoint,
-    PendingCheckpointInfo,
+    BuilderCheckpointSummary, CheckpointCommitHeight, CheckpointServiceNotify, EpochStats,
+    PendingCheckpoint, PendingCheckpointInfo,
 };
 use crate::consensus_handler::{
     SequencedConsensusTransaction, SequencedConsensusTransactionKey,
@@ -274,7 +275,7 @@ pub struct AuthorityEpochTables {
     user_signatures_for_checkpoints: DBMap<TransactionDigest, Vec<GenericSignature>>,
 
     /// Maps sequence number to checkpoint summary, used by CheckpointBuilder to build checkpoint within epoch
-    builder_checkpoint_summary: DBMap<CheckpointSequenceNumber, CheckpointSummary>,
+    builder_checkpoint_summary_v2: DBMap<CheckpointSequenceNumber, BuilderCheckpointSummary>,
 
     // Maps checkpoint sequence number to an accumulator with accumulated state
     // only for the checkpoint that the key references. Append-only, i.e.,
@@ -340,7 +341,8 @@ impl AuthorityPerEpochStore {
         epoch_start_configuration: EpochStartConfiguration,
         store: Arc<AuthorityStore>,
         cache_metrics: Arc<ResolverMetrics>,
-        signature_verifier_metrics: Arc<VerifiedDigestCacheMetrics>,
+        signature_verifier_metrics: Arc<SignatureVerifierMetrics>,
+        expensive_safety_check_config: &ExpensiveSafetyCheckConfig,
     ) -> Arc<Self> {
         let current_time = Instant::now();
         let epoch_id = committee.epoch;
@@ -376,7 +378,12 @@ impl AuthorityPerEpochStore {
             .protocol_version();
         let protocol_config = ProtocolConfig::get_for_version(protocol_version);
 
-        let execution_component = ExecutionComponents::new(&protocol_config, store, cache_metrics);
+        let execution_component = ExecutionComponents::new(
+            &protocol_config,
+            store,
+            cache_metrics,
+            expensive_safety_check_config,
+        );
         let signature_verifier =
             SignatureVerifier::new(committee.clone(), signature_verifier_metrics);
         let s = Arc::new(Self {
@@ -424,6 +431,7 @@ impl AuthorityPerEpochStore {
         new_committee: Committee,
         epoch_start_configuration: EpochStartConfiguration,
         store: Arc<AuthorityStore>,
+        expensive_safety_check_config: &ExpensiveSafetyCheckConfig,
     ) -> Arc<Self> {
         assert_eq!(self.epoch() + 1, new_committee.epoch);
         self.record_reconfig_halt_duration_metric();
@@ -438,6 +446,7 @@ impl AuthorityPerEpochStore {
             store,
             self.execution_component.metrics(),
             self.signature_verifier.metrics.clone(),
+            expensive_safety_check_config,
         )
     }
 
@@ -1041,7 +1050,7 @@ impl AuthorityPerEpochStore {
         Ok(())
     }
 
-    pub fn get_capabilities(&self) -> Vec<AuthorityCapabilities> {
+    pub fn get_capabilities(&self) -> Result<Vec<AuthorityCapabilities>, TypedStoreError> {
         self.tables.authority_capabilities.values().collect()
     }
 
@@ -1703,8 +1712,17 @@ impl AuthorityPerEpochStore {
         self.record_checkpoint_boundary(round)
     }
 
-    pub fn get_pending_checkpoints(&self) -> Vec<(CheckpointCommitHeight, PendingCheckpoint)> {
-        self.tables.pending_checkpoints.iter().collect()
+    pub fn get_pending_checkpoints(
+        &self,
+        last: Option<CheckpointCommitHeight>,
+    ) -> Vec<(CheckpointCommitHeight, PendingCheckpoint)> {
+        let mut iter = self.tables.pending_checkpoints.iter();
+        if let Some(last_processed_height) = last {
+            iter = iter
+                .skip_to(&(last_processed_height + 1))
+                .expect("Unexpected storage error");
+        }
+        iter.collect()
     }
 
     pub fn get_pending_checkpoint(
@@ -1725,20 +1743,28 @@ impl AuthorityPerEpochStore {
     pub fn process_pending_checkpoint(
         &self,
         commit_height: CheckpointCommitHeight,
-        content_info: &[(CheckpointSummary, CheckpointContents)],
+        content_info: Vec<(CheckpointSummary, CheckpointContents)>,
     ) -> Result<(), TypedStoreError> {
+        // All created checkpoints are inserted in builder_checkpoint_summary in a single batch.
+        // This means that upon restart we can use BuilderCheckpointSummary::commit_height
+        // from the last built summary to resume building checkpoints.
         let mut batch = self.tables.pending_checkpoints.batch();
-        batch.delete_batch(&self.tables.pending_checkpoints, [commit_height])?;
-        for (summary, transactions) in content_info {
+        for (position_in_commit, (summary, transactions)) in content_info.into_iter().enumerate() {
+            let sequence_number = summary.sequence_number;
+            let summary = BuilderCheckpointSummary {
+                summary,
+                commit_height: Some(commit_height),
+                position_in_commit,
+            };
             batch.insert_batch(
-                &self.tables.builder_checkpoint_summary,
-                [(&summary.sequence_number, summary)],
+                &self.tables.builder_checkpoint_summary_v2,
+                [(&sequence_number, summary)],
             )?;
             batch.insert_batch(
                 &self.tables.builder_digest_to_checkpoint,
                 transactions
                     .iter()
-                    .map(|tx| (tx.transaction, summary.sequence_number)),
+                    .map(|tx| (tx.transaction, sequence_number)),
             )?;
         }
 
@@ -1762,10 +1788,24 @@ impl AuthorityPerEpochStore {
                 .builder_digest_to_checkpoint
                 .insert(&digest, &sequence)?;
         }
+        let builder_summary = BuilderCheckpointSummary {
+            summary: summary.clone(),
+            commit_height: None,
+            position_in_commit: 0,
+        };
         self.tables
-            .builder_checkpoint_summary
-            .insert(summary.sequence_number(), summary)?;
+            .builder_checkpoint_summary_v2
+            .insert(summary.sequence_number(), &builder_summary)?;
         Ok(())
+    }
+
+    pub fn last_built_checkpoint_commit_height(&self) -> Option<CheckpointCommitHeight> {
+        self.tables
+            .builder_checkpoint_summary_v2
+            .iter()
+            .skip_to_last()
+            .next()
+            .and_then(|(_, b)| b.commit_height)
     }
 
     pub fn last_built_checkpoint_summary(
@@ -1773,17 +1813,22 @@ impl AuthorityPerEpochStore {
     ) -> SuiResult<Option<(CheckpointSequenceNumber, CheckpointSummary)>> {
         Ok(self
             .tables
-            .builder_checkpoint_summary
+            .builder_checkpoint_summary_v2
             .iter()
             .skip_to_last()
-            .next())
+            .next()
+            .map(|(seq, s)| (seq, s.summary)))
     }
 
     pub fn get_built_checkpoint_summary(
         &self,
         sequence: CheckpointSequenceNumber,
     ) -> SuiResult<Option<CheckpointSummary>> {
-        Ok(self.tables.builder_checkpoint_summary.get(&sequence)?)
+        Ok(self
+            .tables
+            .builder_checkpoint_summary_v2
+            .get(&sequence)?
+            .map(|s| s.summary))
     }
 
     pub fn builder_included_transaction_in_checkpoint(
@@ -1919,11 +1964,16 @@ impl ExecutionComponents {
         protocol_config: &ProtocolConfig,
         store: Arc<AuthorityStore>,
         metrics: Arc<ResolverMetrics>,
+        expensive_safety_check_config: &ExpensiveSafetyCheckConfig,
     ) -> Self {
         let native_functions = sui_framework::natives::all_natives();
         let move_vm = Arc::new(
-            adapter::new_move_vm(native_functions.clone(), protocol_config)
-                .expect("We defined natives to not fail here"),
+            adapter::new_move_vm(
+                native_functions.clone(),
+                protocol_config,
+                expensive_safety_check_config.enable_move_vm_paranoid_checks(),
+            )
+            .expect("We defined natives to not fail here"),
         );
         let module_cache = Arc::new(SyncModuleCache::new(ResolverWrapper::new(
             store,

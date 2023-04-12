@@ -49,7 +49,7 @@ module sui_system::sui_system {
     use sui::tx_context::{Self, TxContext};
     use sui_system::validator::Validator;
     use sui_system::validator_cap::UnverifiedValidatorOperationCap;
-    use sui_system::sui_system_state_inner::{Self, SystemParameters, SuiSystemStateInner};
+    use sui_system::sui_system_state_inner::{Self, SystemParameters, SuiSystemStateInnerV2};
     use sui_system::stake_subsidy::StakeSubsidy;
     use std::option;
     use sui::dynamic_field;
@@ -65,6 +65,8 @@ module sui_system::sui_system {
 
     #[test_only]
     friend sui_system::governance_test_utils;
+    #[test_only]
+    friend sui_system::sui_system_tests;
 
     struct SuiSystemState has key {
         id: UID,
@@ -534,58 +536,23 @@ module sui_system::sui_system {
         storage_rebate
     }
 
-    /// An extremely simple version of advance_epoch.
-    /// This is called in two situations:
-    ///   - When the call to advance_epoch failed due to a bug, and we want to be able to keep the
-    ///     system running and continue making epoch changes.
-    ///   - When advancing to a new protocol version, we want to be able to change the protocol
-    ///     version
-    fun advance_epoch_safe_mode(
-        storage_reward: Balance<SUI>,
-        computation_reward: Balance<SUI>,
-        wrapper: &mut SuiSystemState,
-        new_epoch: u64,
-        next_protocol_version: u64,
-        storage_rebate: u64,
-        non_refundable_storage_fee: u64,
-        epoch_start_timestamp_ms: u64,
-        ctx: &mut TxContext,
-    ) {
-        let self = load_system_state_mut(wrapper);
-        // Validator will make a special system call with sender set as 0x0.
-        assert!(tx_context::sender(ctx) == @0x0, ENotSystemAddress);
-        sui_system_state_inner::advance_epoch_safe_mode(
-            self,
-            new_epoch,
-            next_protocol_version,
-            storage_reward,
-            computation_reward,
-            storage_rebate,
-            non_refundable_storage_fee,
-            epoch_start_timestamp_ms,
-            ctx
-        )
-    }
-
-    fun load_system_state(self: &mut SuiSystemState): &SuiSystemStateInner {
+    fun load_system_state(self: &mut SuiSystemState): &SuiSystemStateInnerV2 {
         load_inner_maybe_upgrade(self)
     }
 
-    fun load_system_state_mut(self: &mut SuiSystemState): &mut SuiSystemStateInner {
+    fun load_system_state_mut(self: &mut SuiSystemState): &mut SuiSystemStateInnerV2 {
         load_inner_maybe_upgrade(self)
     }
 
-    fun load_inner_maybe_upgrade(self: &mut SuiSystemState): &mut SuiSystemStateInner {
-        // TODO: This is where we check the version and perform upgrade if necessary.
-        // if (self.version == 1) {
-        //   let v1 = dynamic_field::remove(&mut self.id, self.version);
-        //   let v2 = sui_system_state_inner::v1_to_v2(v1);
-        //   assert!(v2.system_state_version = 2, EWrongInnerVersion);
-        //   self.version = 2;
-        //   dynamic_field::add(&mut self.id, self.version, v2);
-        // }
+    fun load_inner_maybe_upgrade(self: &mut SuiSystemState): &mut SuiSystemStateInnerV2 {
+        if (self.version == 1) {
+          let v1 = dynamic_field::remove(&mut self.id, self.version);
+          let v2 = sui_system_state_inner::v1_to_v2(v1);
+          self.version = 2;
+          dynamic_field::add(&mut self.id, self.version, v2);
+        };
 
-        let inner: &mut SuiSystemStateInner = dynamic_field::borrow_mut(&mut self.id, self.version);
+        let inner = dynamic_field::borrow_mut(&mut self.id, self.version);
         assert!(sui_system_state_inner::system_state_version(inner) == self.version, EWrongInnerVersion);
         inner
     }
@@ -688,6 +655,12 @@ module sui_system::sui_system {
         sui_system_state_inner::get_storage_fund_object_rebates(self)
     }
 
+    #[test_only]
+    public fun get_stake_subsidy_distribution_counter(wrapper: &mut SuiSystemState): u64 {
+        let self = load_system_state(wrapper);
+        sui_system_state_inner::get_stake_subsidy_distribution_counter(self)
+    }
+
     // CAUTION: THIS CODE IS ONLY FOR TESTING AND THIS MACRO MUST NEVER EVER BE REMOVED.  Creates a
     // candidate validator - bypassing the proof of possession check and other metadata validation
     // in the process.
@@ -762,32 +735,5 @@ module sui_system::sui_system {
             ctx,
         );
         storage_rebate
-    }
-
-    // CAUTION: THIS CODE IS ONLY FOR TESTING AND THIS MACRO MUST NEVER EVER BE REMOVED.
-    #[test_only]
-    public(friend) fun advance_epoch_safe_mode_for_testing(
-        wrapper: &mut SuiSystemState,
-        new_epoch: u64,
-        next_protocol_version: u64,
-        storage_charge: u64,
-        computation_charge: u64,
-        storage_rebate: u64,
-        non_refundable_storage_fee: u64,
-        ctx: &mut TxContext,
-    ) {
-        let storage_reward = balance::create_for_testing(storage_charge);
-        let computation_reward = balance::create_for_testing(computation_charge);
-        advance_epoch_safe_mode(
-            storage_reward,
-            computation_reward,
-            wrapper,
-            new_epoch,
-            next_protocol_version,
-            storage_rebate,
-            non_refundable_storage_fee,
-            0,
-            ctx,
-        );
     }
 }

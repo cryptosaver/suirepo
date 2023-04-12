@@ -79,7 +79,7 @@ pub const DEFAULT_EPOCH_ID: EpochId = 0;
 /// Creates a proof of that the authority account address is owned by the
 /// holder of authority protocol key, and also ensures that the authority
 /// protocol public key exists. A proof of possession is an authority
-/// signature committed over the intent message `intent || message` (See
+/// signature committed over the intent message `intent || message || epoch` (See
 /// more at [struct IntentMessage] and [struct Intent]) where the message is
 /// constructed as `authority_pubkey_bytes || authority_account_address`.
 pub fn generate_proof_of_possession(
@@ -90,10 +90,7 @@ pub fn generate_proof_of_possession(
     msg.extend_from_slice(keypair.public().as_bytes());
     msg.extend_from_slice(address.as_ref());
     AuthoritySignature::new_secure(
-        &IntentMessage::new(
-            Intent::default().with_scope(IntentScope::ProofOfPossession),
-            msg,
-        ),
+        &IntentMessage::new(Intent::sui_app(IntentScope::ProofOfPossession), msg),
         &DEFAULT_EPOCH_ID,
         keypair,
     )
@@ -110,10 +107,7 @@ pub fn verify_proof_of_possession(
     let mut msg = protocol_pubkey.as_bytes().to_vec();
     msg.extend_from_slice(sui_address.as_ref());
     pop.verify_secure(
-        &IntentMessage::new(
-            Intent::default().with_scope(IntentScope::ProofOfPossession),
-            msg,
-        ),
+        &IntentMessage::new(Intent::sui_app(IntentScope::ProofOfPossession), msg),
         DEFAULT_EPOCH_ID,
         protocol_pubkey.into(),
     )
@@ -382,26 +376,47 @@ impl AuthorityPublicKeyBytes {
         Ok(())
     }
 
-    /// Get a ConciseAuthorityPublicKeyBytes. Usage:
+    /// Get a ConciseAuthorityPublicKeyBytesRef. Usage:
     ///
     ///   debug!(name = ?authority.concise());
     ///   format!("{:?}", authority.concise());
-    pub fn concise(&self) -> ConciseAuthorityPublicKeyBytes<'_> {
+    pub fn concise(&self) -> ConciseAuthorityPublicKeyBytesRef<'_> {
+        ConciseAuthorityPublicKeyBytesRef(self)
+    }
+
+    pub fn into_concise(self) -> ConciseAuthorityPublicKeyBytes {
         ConciseAuthorityPublicKeyBytes(self)
     }
 }
 
 /// A wrapper around AuthorityPublicKeyBytes that provides a concise Debug impl.
-pub struct ConciseAuthorityPublicKeyBytes<'a>(&'a AuthorityPublicKeyBytes);
+pub struct ConciseAuthorityPublicKeyBytesRef<'a>(&'a AuthorityPublicKeyBytes);
 
-impl Debug for ConciseAuthorityPublicKeyBytes<'_> {
+impl Debug for ConciseAuthorityPublicKeyBytesRef<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         let s = Hex::encode(self.0 .0.get(0..4).ok_or(std::fmt::Error)?);
         write!(f, "k#{}..", s)
     }
 }
 
-impl Display for ConciseAuthorityPublicKeyBytes<'_> {
+impl Display for ConciseAuthorityPublicKeyBytesRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        Debug::fmt(self, f)
+    }
+}
+
+/// A wrapper around AuthorityPublicKeyBytes but owns it.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConciseAuthorityPublicKeyBytes(AuthorityPublicKeyBytes);
+
+impl Debug for ConciseAuthorityPublicKeyBytes {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let s = Hex::encode(self.0 .0.get(0..4).ok_or(std::fmt::Error)?);
+        write!(f, "k#{}..", s)
+    }
+}
+
+impl Display for ConciseAuthorityPublicKeyBytes {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         Debug::fmt(self, f)
     }
@@ -1566,7 +1581,7 @@ pub mod bcs_signable_test {
         let idx = obligation.add_message(
             value,
             0,
-            Intent::default().with_scope(IntentScope::SenderSignedTransaction),
+            Intent::sui_app(IntentScope::SenderSignedTransaction),
         );
         (obligation, idx)
     }
